@@ -705,12 +705,13 @@ export MODLIB
 
 ifdef INSTALL_MOD_STRIP
 ifeq ($(INSTALL_MOD_STRIP),1)
-mod_strip_cmd = $(STRIP) --strip-debug
+mod_strip_cmd = $(OBJCOPY) --strip-debug --strip-symbols \
+		$(srctree)/scripts/strip-symbols --wildcard
 else
-mod_strip_cmd = $(STRIP) $(INSTALL_MOD_STRIP)
+mod_strip_cmd = $(OBJCOPY) $(INSTALL_MOD_STRIP)
 endif # INSTALL_MOD_STRIP=1
 else
-mod_strip_cmd = true
+mod_strip_cmd = false
 endif # INSTALL_MOD_STRIP
 export mod_strip_cmd
 
