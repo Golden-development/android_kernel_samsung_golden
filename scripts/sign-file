@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# Sign a module file using the given key.
+#
+# Format: sign-file <key> <x509> <keyid-script> <module>
+#
+
+scripts=`dirname $0`
+
+CONFIG_MODULE_SIG_SHA512=y
+if [ -r .config ]
+then
+    . ./.config
+fi
+
+key="$1"
+x509="$2"
+keyid_script="$3"
+mod="$4"
+
+if [ ! -r "$key" ]
+then
+    echo "Can't read private key" >&2
+    exit 2
+fi
+
+if [ ! -r "$x509" ]
+then
+    echo "Can't read X.509 certificate" >&2
+    exit 2
+fi
+
+#
+# Signature parameters
+#
+algo=1		# Public-key crypto algorithm: RSA
+hash=		# Digest algorithm
+id_type=1	# Identifier type: X.509
+
+#
+# Digest the data
+#
+dgst=
+if [ "$CONFIG_MODULE_SIG_SHA1" = "y" ]
+then
+    prologue="0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14"
+    dgst=-sha1
+    hash=2
+elif [ "$CONFIG_MODULE_SIG_SHA224" = "y" ]
+then
+    prologue="0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05, 0x00, 0x04, 0x1C"
+    dgst=-sha224
+    hash=7
+elif [ "$CONFIG_MODULE_SIG_SHA256" = "y" ]
+then
+    prologue="0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20"
+    dgst=-sha256
+    hash=4
+elif [ "$CONFIG_MODULE_SIG_SHA384" = "y" ]
+then
+    prologue="0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30"
+    dgst=-sha384
+    hash=5
+elif [ "$CONFIG_MODULE_SIG_SHA512" = "y" ]
+then
+    prologue="0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40"
+    dgst=-sha512
+    hash=6
+else
+    echo "$0: Can't determine hash algorithm" >&2
+    exit 2
+fi
+
+(
+perl -e "binmode STDOUT; print pack(\"C*\", $prologue)" || exit $?
+openssl dgst $dgst -binary $mod || exit $?
+) >$mod.dig || exit $?
+
+#
+# Generate the binary signature, which will be just the integer that comprises
+# the signature with no metadata attached.
+#
+openssl rsautl -sign -inkey $key -keyform PEM -in $mod.dig -out $mod.sig || exit $?
+
+SIGNER="`perl $keyid_script $x509 signer-name`"
+KEYID="`perl $keyid_script $x509 keyid`"
+keyidlen=${#KEYID}
+siglen=${#SIGNER}
+
+#
+# Build the signed binary
+#
+(
+    cat $mod || exit $?
+    echo '~Module signature appended~' || exit $?
+    echo -n "$SIGNER" || exit $?
+    echo -n "$KEYID" || exit $?
+
+    # Preface each signature integer with a 2-byte BE length
+    perl -e "binmode STDOUT; print pack(\"n\", $siglen)" || exit $?
+    cat $mod.sig || exit $?
+
+    # Generate the information block
+    perl -e "binmode STDOUT; print pack(\"CCCCCxxxN\", $algo, $hash, $id_type, $signerlen, $keyidlen, $siglen + 2)" || exit $?
+) >$mod~ || exit $?
+
+mv $mod~ $mod || exit $?
